@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir /b *.bat)",
+      "Bash(del upload_to_mecha_server.bat upload_to_mecha_server_v2.bat)",
+      "Bash(where ftp)",
+      "Bash(chcp)",
+      "Bash(head -500 *.md)",
+      "Bash(npx skills find create skill)",
+      "WebSearch",
+      "WebFetch(domain:docs.crewai.com)",
+      "WebFetch(domain:langchain-ai.github.io)",
+      "WebFetch(domain:microsoft.github.io)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}
