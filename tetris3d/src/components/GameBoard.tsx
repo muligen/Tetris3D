@@ -1,0 +1,413 @@
+import { useRef, useEffect, useMemo } from 'react';
+import { useFrame } from '@react-three/fiber';
+import * as THREE from 'three';
+import { Board, BOARD_WIDTH, BOARD_HEIGHT, BLOCK_SIZE } from '../game/Board';
+import { Piece } from '../game/Piece';
+import { useTetrisStore } from '../stores/tetrisStore';
+import { Easing } from '../utils/animation';
+
+interface GameBoardProps {
+  board: Board;
+  currentPiece: Piece | null;
+}
+
+// Squash animation duration in ms
+const SQUASH_DURATION = 400;
+
+// Maximum number of blocks that can be placed on the board
+const MAX_BLOCKS = BOARD_WIDTH * BOARD_HEIGHT;
+
+export function GameBoard({ board, currentPiece }: GameBoardProps) {
+  const meshRef = useRef<THREE.Group>(null);
+  const placedMeshRef = useRef<THREE.Group>(null);
+  const lastVersionRef = useRef(0);
+
+  // Ref to track the InstancedMesh for each color
+  const placedPiecesRef = useRef<Map<number, {
+    mesh: THREE.InstancedMesh;
+    count: number;
+    matrices: Float32Array;
+  }>>(new Map());
+
+  // Ref to track the current mapping of cells to their instance indices
+  const cellToIndexRef = useRef<Map<string, number>>(new Map());
+
+  // Reusable temporary objects for matrix calculations (avoid per-frame allocations)
+  const tempMatrix = useRef(new THREE.Matrix4()).current;
+  const tempQuaternion = useRef(new THREE.Quaternion()).current;
+  const tempPosition = useRef(new THREE.Vector3()).current;
+  const tempScale = useRef(new THREE.Vector3()).current;
+
+  // Track squash animation for recently placed cells
+  const squashAnimRef = useRef<{
+    cells: Set<string>; // Set of "x,y" strings for cells to animate
+    startTime: number;
+    intensity: number;
+  } | null>(null);
+
+  // Material for current piece (reused across frames)
+  const currentPieceMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
+
+  // Get landing impact state from store
+  const landingImpact = useTetrisStore((state) => state.landingImpact);
+  // Subscribe to version to detect game state changes every frame
+  const version = useTetrisStore((state) => state.version);
+
+  // Shared geometry for all blocks (cached as singleton)
+  const blockGeometry = useMemo(() => new THREE.BoxGeometry(
+    BLOCK_SIZE * 0.9,
+    BLOCK_SIZE * 0.9,
+    BLOCK_SIZE * 0.5
+  ), []);
+
+  // Material cache for placed pieces (keyed by color)
+  const materialCache = useRef<Map<number, THREE.MeshStandardMaterial>>(new Map());
+
+  // Get or create a material for a specific color
+  const getMaterialForColor = (color: number, isCurrentPiece: boolean = false): THREE.MeshStandardMaterial => {
+    const cache = materialCache.current;
+    if (!cache.has(color)) {
+      cache.set(color, new THREE.MeshStandardMaterial({
+        color: color,
+        roughness: 0.2,
+        metalness: 0.6,
+        emissive: color,
+        emissiveIntensity: isCurrentPiece ? 0.4 : 0.1,
+      }));
+    }
+    return cache.get(color)!;
+  };
+
+  // Create board mesh (static elements)
+  const boardMesh = useMemo(() => {
+    const group = new THREE.Group();
+
+    // Back panel
+    const backGeometry = new THREE.BoxGeometry(
+      BOARD_WIDTH * BLOCK_SIZE,
+      BOARD_HEIGHT * BLOCK_SIZE,
+      BLOCK_SIZE * 0.2
+    );
+    const backMaterial = new THREE.MeshStandardMaterial({
+      color: 0x111122,
+      roughness: 0.8,
+      metalness: 0.2,
+    });
+    const backPanel = new THREE.Mesh(backGeometry, backMaterial);
+    backPanel.position.set(
+      (BOARD_WIDTH * BLOCK_SIZE) / 2 - BLOCK_SIZE / 2,
+      (BOARD_HEIGHT * BLOCK_SIZE) / 2 - BLOCK_SIZE / 2,
+      -BLOCK_SIZE * 0.1
+    );
+    group.add(backPanel);
+
+    // Grid lines
+    const gridMaterial = new THREE.LineBasicMaterial({
+      color: 0x4466aa,
+      opacity: 0.5,
+      transparent: true,
+    });
+
+    // Vertical lines
+    for (let x = 0; x <= BOARD_WIDTH; x++) {
+      const points = [
+        new THREE.Vector3(x * BLOCK_SIZE, 0, 0),
+        new THREE.Vector3(x * BLOCK_SIZE, BOARD_HEIGHT * BLOCK_SIZE, 0),
+      ];
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const line = new THREE.Line(geometry, gridMaterial);
+      group.add(line);
+    }
+
+    // Horizontal lines
+    for (let y = 0; y <= BOARD_HEIGHT; y++) {
+      const points = [
+        new THREE.Vector3(0, y * BLOCK_SIZE, 0),
+        new THREE.Vector3(BOARD_WIDTH * BLOCK_SIZE, y * BLOCK_SIZE, 0),
+      ];
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const line = new THREE.Line(geometry, gridMaterial);
+      group.add(line);
+    }
+
+    // Border material
+    const borderMaterial = new THREE.MeshStandardMaterial({
+      color: 0x6688cc,
+      roughness: 0.3,
+      metalness: 0.7,
+      emissive: 0x334488,
+      emissiveIntensity: 0.3,
+    });
+
+    // Left border
+    const leftBorder = new THREE.Mesh(
+      new THREE.BoxGeometry(BLOCK_SIZE * 0.15, BOARD_HEIGHT * BLOCK_SIZE, BLOCK_SIZE * 0.5),
+      borderMaterial
+    );
+    leftBorder.position.set(-BLOCK_SIZE * 0.075, (BOARD_HEIGHT * BLOCK_SIZE) / 2 - BLOCK_SIZE / 2, 0);
+    group.add(leftBorder);
+
+    // Right border
+    const rightBorder = new THREE.Mesh(
+      new THREE.BoxGeometry(BLOCK_SIZE * 0.15, BOARD_HEIGHT * BLOCK_SIZE, BLOCK_SIZE * 0.5),
+      borderMaterial
+    );
+    rightBorder.position.set(BOARD_WIDTH * BLOCK_SIZE + BLOCK_SIZE * 0.075, (BOARD_HEIGHT * BLOCK_SIZE) / 2 - BLOCK_SIZE / 2, 0);
+    group.add(rightBorder);
+
+    // Bottom border
+    const bottomBorder = new THREE.Mesh(
+      new THREE.BoxGeometry(BOARD_WIDTH * BLOCK_SIZE + BLOCK_SIZE * 0.3, BLOCK_SIZE * 0.15, BLOCK_SIZE * 0.5),
+      borderMaterial
+    );
+    bottomBorder.position.set((BOARD_WIDTH * BLOCK_SIZE) / 2 - BLOCK_SIZE / 2, -BLOCK_SIZE * 0.075, 0);
+    group.add(bottomBorder);
+
+    return group;
+  }, []);
+
+  // Shared geometry for current piece cubes
+  const pieceGeometry = useMemo(() => new THREE.BoxGeometry(
+    BLOCK_SIZE * 0.9,
+    BLOCK_SIZE * 0.9,
+    BLOCK_SIZE * 0.5
+  ), []);
+
+  // Start squash animation when landing impact occurs
+  useEffect(() => {
+    if (landingImpact && landingImpact.cells.length > 0) {
+      const cellSet = new Set<string>();
+      landingImpact.cells.forEach(([x, y]) => {
+        cellSet.add(`${x},${y}`);
+      });
+      squashAnimRef.current = {
+        cells: cellSet,
+        startTime: Date.now(),
+        intensity: landingImpact.intensity,
+      };
+    }
+  }, [landingImpact]);
+
+  // Update placed pieces mesh - optimized to reuse InstancedMesh
+  const updatePlacedPieces = () => {
+    const occupiedCells = board.getOccupiedCells();
+
+    // Group by color
+    const cellsByColor = new Map<number, Array<[number, number, number]>>();
+    occupiedCells.forEach(([x, y, color]) => {
+      if (!cellsByColor.has(color)) {
+        cellsByColor.set(color, []);
+      }
+      cellsByColor.get(color)!.push([x, y, color]);
+    });
+
+    const placedPieces = placedPiecesRef.current;
+    const cellToIndex = cellToIndexRef.current;
+    const group = placedMeshRef.current!;
+
+    // Remove old meshes that are no longer needed
+    const currentColors = new Set(cellsByColor.keys());
+    for (const [color, data] of placedPieces.entries()) {
+      if (!currentColors.has(color)) {
+        group.remove(data.mesh);
+        placedPieces.delete(color);
+      }
+    }
+
+    // Update or create meshes for each color
+    cellsByColor.forEach((cells, color) => {
+      const cellCount = cells.length;
+
+      if (!placedPieces.has(color)) {
+        // Create new InstancedMesh for this color
+        const material = getMaterialForColor(color);
+        const mesh = new THREE.InstancedMesh(blockGeometry, material, MAX_BLOCKS);
+        mesh.count = cellCount;
+        group.add(mesh);
+
+        // Initialize all matrices to identity (hide unused instances)
+        for (let i = 0; i < MAX_BLOCKS; i++) {
+          tempMatrix.makeScale(0, 0, 0); // Hide by scaling to zero
+          mesh.setMatrixAt(i, tempMatrix);
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+
+        placedPieces.set(color, {
+          mesh,
+          count: cellCount,
+          matrices: new Float32Array(MAX_BLOCKS * 16),
+        });
+      } else {
+        const data = placedPieces.get(color)!;
+        data.mesh.count = cellCount;
+      }
+
+      // Update cell-to-index mapping
+      const data = placedPieces.get(color)!;
+      cells.forEach(([x, y], index) => {
+        const cellKey = `${x},${y}`;
+        cellToIndex.set(cellKey, index);
+
+        // Calculate base matrix (without squash)
+        const flippedY = (BOARD_HEIGHT - 1 - y) * BLOCK_SIZE + BLOCK_SIZE / 2;
+        tempPosition.set(
+          x * BLOCK_SIZE + BLOCK_SIZE / 2,
+          flippedY,
+          BLOCK_SIZE * 0.25
+        );
+        tempScale.set(1, 1, 1);
+        tempQuaternion.identity();
+        tempMatrix.compose(tempPosition, tempQuaternion, tempScale);
+        data.mesh.setMatrixAt(index, tempMatrix);
+      });
+
+      // Hide unused instances
+      for (let i = cellCount; i < MAX_BLOCKS; i++) {
+        tempMatrix.makeScale(0, 0, 0);
+        data.mesh.setMatrixAt(i, tempMatrix);
+      }
+
+      data.mesh.instanceMatrix.needsUpdate = true;
+    });
+
+    // Clean up cell-to-index mapping for cells that no longer exist
+    const allCurrentCells = new Set<string>();
+    occupiedCells.forEach(([x, y]) => {
+      allCurrentCells.add(`${x},${y}`);
+    });
+    for (const cellKey of cellToIndex.keys()) {
+      if (!allCurrentCells.has(cellKey)) {
+        cellToIndex.delete(cellKey);
+      }
+    }
+  };
+
+  // Update only the matrices for cells in squash animation
+  const updateSquashAnimation = () => {
+    const squashAnim = squashAnimRef.current;
+    if (!squashAnim) return;
+
+    const elapsed = Date.now() - squashAnim.startTime;
+    const progress = Math.min(elapsed / SQUASH_DURATION, 1);
+
+    if (progress >= 1) {
+      squashAnimRef.current = null;
+      // Reset all matrices to base state
+      updatePlacedPieces();
+      return;
+    }
+
+    const squashOffset = Easing.easeOutSquash(progress) * squashAnim.intensity;
+    const occupiedCells = board.getOccupiedCells();
+
+    // Update only cells that are in the squash animation
+    occupiedCells.forEach(([x, y, color]) => {
+      const cellKey = `${x},${y}`;
+      if (!squashAnim.cells.has(cellKey)) return;
+
+      const placedPieces = placedPiecesRef.current;
+      if (!placedPieces.has(color)) return;
+
+      const data = placedPieces.get(color)!;
+      const cellToIndex = cellToIndexRef.current;
+      const index = cellToIndex.get(cellKey);
+      if (index === undefined) return;
+
+      // Apply squash transformation
+      const flippedY = (BOARD_HEIGHT - 1 - y) * BLOCK_SIZE + BLOCK_SIZE / 2;
+      tempPosition.set(
+        x * BLOCK_SIZE + BLOCK_SIZE / 2,
+        flippedY,
+        BLOCK_SIZE * 0.25
+      );
+
+      // Apply squash and stretch
+      const scaleY = 1 + squashOffset; // squashOffset is negative during compression
+      const scaleX = 1 - squashOffset * 0.5; // Expand X
+      const scaleZ = 1 - squashOffset * 0.5; // Expand Z
+      tempScale.set(scaleX, scaleY, scaleZ);
+
+      tempQuaternion.identity();
+      tempMatrix.compose(tempPosition, tempQuaternion, tempScale);
+      data.mesh.setMatrixAt(index, tempMatrix);
+      data.mesh.instanceMatrix.needsUpdate = true;
+    });
+  };
+
+  // Animation frame - update scene every frame
+  useFrame(() => {
+    if (!meshRef.current || !placedMeshRef.current) return;
+
+    // 1. Update placed pieces when game state changes
+    if (version !== lastVersionRef.current) {
+      lastVersionRef.current = version;
+      updatePlacedPieces();
+    }
+
+    // 2. Update squash animation (every frame)
+    updateSquashAnimation();
+
+    // 3. Update current piece positions
+    // Find existing current piece group (tagged with userData)
+    let pieceGroup = meshRef.current.children.find(
+      c => c.userData?.isCurrentPiece
+    ) as THREE.Group | undefined;
+
+    if (currentPiece) {
+      const cells = currentPiece.getCells();
+      const color = currentPiece.getColor();
+
+      if (!pieceGroup) {
+        pieceGroup = new THREE.Group();
+        pieceGroup.userData.isCurrentPiece = true;
+        meshRef.current.add(pieceGroup);
+      }
+
+      // Get or create material for current piece
+      let material = currentPieceMaterialRef.current;
+      if (!material) {
+        material = getMaterialForColor(color, true);
+        currentPieceMaterialRef.current = material;
+      } else {
+        // Update color if piece type changed
+        material.color.setHex(color);
+        material.emissive.setHex(color);
+      }
+
+      // Ensure correct number of cubes
+      while (pieceGroup.children.length > cells.length) {
+        pieceGroup.remove(pieceGroup.children[pieceGroup.children.length - 1]);
+      }
+      while (pieceGroup.children.length < cells.length) {
+        pieceGroup.add(new THREE.Mesh(pieceGeometry, material));
+      }
+
+      // Update positions and material
+      cells.forEach(([x, y], i) => {
+        const flippedY = (BOARD_HEIGHT - 1 - y) * BLOCK_SIZE + BLOCK_SIZE / 2;
+        const mesh = pieceGroup!.children[i] as THREE.Mesh;
+        mesh.position.set(
+          x * BLOCK_SIZE + BLOCK_SIZE / 2,
+          flippedY,
+          BLOCK_SIZE * 0.25
+        );
+        // Ensure all cubes use the shared material
+        mesh.material = material;
+      });
+    } else if (pieceGroup) {
+      // No current piece, remove group
+      meshRef.current.remove(pieceGroup);
+      currentPieceMaterialRef.current = null;
+    }
+  });
+
+  return (
+    <group ref={meshRef}>
+      {/* Game board (static) */}
+      <primitive object={boardMesh} />
+
+      {/* Placed pieces - managed by useFrame */}
+      <group ref={placedMeshRef} />
+    </group>
+  );
+}
