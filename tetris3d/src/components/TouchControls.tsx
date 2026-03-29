@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 
 interface TouchControlsProps {
   onMoveLeft: () => void;
@@ -8,7 +8,7 @@ interface TouchControlsProps {
   onTogglePause: () => void;
 }
 
-export function TouchControls({
+export const TouchControls = memo(function TouchControls({
   onMoveLeft,
   onMoveRight,
   onRotate,
@@ -83,4 +83,4 @@ export function TouchControls({
       </button>
     </div>
   );
-}
+});

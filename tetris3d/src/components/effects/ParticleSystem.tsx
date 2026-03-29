@@ -65,6 +65,14 @@ export function ParticleSystem({
     return [geo, mat];
   }, [count]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+      material.dispose();
+    };
+  }, [geometry, material]);
+
   useFrame((_, delta) => {
     const particles = particlesRef.current;
     const positions = geometry.attributes.position.array as Float32Array;

@@ -180,6 +180,9 @@ export const useTetrisStore = create<TetrisState>((set, get) => {
       game.setOnPiecePlaced((cells: number[][], color: number, isHardDrop: boolean) => {
         audioService.playDrop();
         get().triggerLandingImpact(cells, color, isHardDrop);
+        // 方块放置时触发 version 更新，确保 3D 场景同步
+        // （新方块生成、已放置方块更新都需要）
+        get().triggerUpdate();
       });
 
       game.setOnGameOver(() => {

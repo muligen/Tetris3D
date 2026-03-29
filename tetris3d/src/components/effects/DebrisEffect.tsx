@@ -3,12 +3,11 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { BOARD_HEIGHT, BLOCK_SIZE } from '../../game/Board';
 
-interface Debris {
+interface DebrisData {
   position: THREE.Vector3;
   velocity: THREE.Vector3;
   rotationSpeed: THREE.Vector3;
   rotation: THREE.Euler;
-  color: number;
   life: number;
   maxLife: number;
 }
@@ -23,9 +22,16 @@ interface DebrisEffectProps {
 // Performance limit
 const MAX_DEBRIS = 200;
 
+// Temporary objects for calculations (avoid per-frame allocations)
+const dummyMatrix = new THREE.Matrix4();
+const dummyPosition = new THREE.Vector3();
+const dummyRotation = new THREE.Euler();
+const dummyQuaternion = new THREE.Quaternion();
+const dummyScale = new THREE.Vector3();
+
 export function DebrisEffect({ cells, combo, onComplete }: DebrisEffectProps) {
-  const debrisRef = useRef<Debris[]>([]);
-  const groupRef = useRef<THREE.Group>(null);
+  const debrisRef = useRef<DebrisData[]>([]);
+  const instancedRef = useRef<THREE.InstancedMesh>(null);
   const completedRef = useRef(false);
 
   // Calculate speed multiplier based on combo
@@ -44,13 +50,13 @@ export function DebrisEffect({ cells, combo, onComplete }: DebrisEffectProps) {
     return shuffled.slice(0, MAX_DEBRIS);
   }, [cells]);
 
-  // Initialize debris
+  // Initialize debris data
   useEffect(() => {
-    const debris: Debris[] = [];
+    const debris: DebrisData[] = [];
     const baseLife = 800;
     const lifeVariance = 200;
 
-    limitedCells.forEach(([x, y, color]) => {
+    limitedCells.forEach(([x, y, _color]) => {
       // Convert to world coordinates
       const worldX = x * BLOCK_SIZE + BLOCK_SIZE / 2;
       const worldY = (BOARD_HEIGHT - 1 - y) * BLOCK_SIZE + BLOCK_SIZE / 2;
@@ -71,7 +77,6 @@ export function DebrisEffect({ cells, combo, onComplete }: DebrisEffectProps) {
         velocity: new THREE.Vector3(vx, vy, vz),
         rotationSpeed: new THREE.Vector3(rx, ry, rz),
         rotation: new THREE.Euler(0, 0, 0),
-        color,
         life: 0,
         maxLife: baseLife + Math.random() * lifeVariance,
       });
@@ -81,9 +86,55 @@ export function DebrisEffect({ cells, combo, onComplete }: DebrisEffectProps) {
     completedRef.current = false;
   }, [limitedCells, speedMultiplier]);
 
+  // Create instanced mesh with shared geometry and material
+  const instancedMesh = useMemo(() => {
+    const geometry = new THREE.BoxGeometry(
+      BLOCK_SIZE * 0.7,
+      BLOCK_SIZE * 0.7,
+      BLOCK_SIZE * 0.2
+    );
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      transparent: true,
+      roughness: 0.3,
+      metalness: 0.5,
+    });
+
+    const mesh = new THREE.InstancedMesh(geometry, material, MAX_DEBRIS);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    return mesh;
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      instancedMesh.geometry.dispose();
+      instancedMesh.material.dispose();
+      instancedMesh.dispose();
+    };
+  }, [instancedMesh]);
+
+  // Colors for each instance
+  const colorsRef = useRef<THREE.Color[]>([]);
+
+  // Update instance colors when cells change
+  useEffect(() => {
+    const colors = limitedCells.map(([_, __, color]) => new THREE.Color(color));
+    colorsRef.current = colors;
+
+    // Set initial instance colors
+    if (instancedRef.current) {
+      colors.forEach((color, i) => {
+        instancedRef.current!.setColorAt(i, color);
+      });
+      instancedRef.current.instanceColor!.needsUpdate = true;
+    }
+  }, [limitedCells]);
+
   // Animation loop
   useFrame((_, delta) => {
-    if (!groupRef.current || completedRef.current) return;
+    const instancedMesh = instancedRef.current;
+    if (!instancedMesh || completedRef.current) return;
 
     const debris = debrisRef.current;
     if (debris.length === 0) return;
@@ -91,12 +142,7 @@ export function DebrisEffect({ cells, combo, onComplete }: DebrisEffectProps) {
     const gravity = -0.004;
     let aliveCount = 0;
 
-    // Clear previous meshes
-    while (groupRef.current.children.length > 0) {
-      groupRef.current.remove(groupRef.current.children[0]);
-    }
-
-    debris.forEach((d) => {
+    debris.forEach((d, i) => {
       if (d.life < d.maxLife) {
         d.life += delta * 1000;
         aliveCount++;
@@ -116,27 +162,35 @@ export function DebrisEffect({ cells, combo, onComplete }: DebrisEffectProps) {
         const lifeRatio = d.life / d.maxLife;
         const opacity = lifeRatio > 0.8 ? 1 - (lifeRatio - 0.8) / 0.2 : 1;
 
-        // Create debris mesh
-        const geometry = new THREE.BoxGeometry(
-          BLOCK_SIZE * 0.7,
-          BLOCK_SIZE * 0.7,
-          BLOCK_SIZE * 0.2
+        // Set instance matrix
+        dummyPosition.copy(d.position);
+        dummyRotation.copy(d.rotation);
+        dummyQuaternion.setFromEuler(dummyRotation);
+        dummyScale.set(opacity, opacity, opacity); // Scale also controls opacity visual
+
+        dummyMatrix.compose(dummyPosition, dummyQuaternion, dummyScale);
+        instancedMesh.setMatrixAt(i, dummyMatrix);
+
+        // Update color with opacity
+        const color = colorsRef.current[i];
+        if (color) {
+          instancedMesh.setColorAt(i, new THREE.Color(color.r * opacity, color.g * opacity, color.b * opacity));
+        }
+      } else {
+        // Hide dead instances
+        dummyMatrix.compose(
+          new THREE.Vector3(0, -1000, 0),
+          new THREE.Quaternion(),
+          new THREE.Vector3(0, 0, 0)
         );
-        const material = new THREE.MeshStandardMaterial({
-          color: d.color,
-          transparent: true,
-          opacity,
-          roughness: 0.3,
-          metalness: 0.5,
-        });
-
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.copy(d.position);
-        mesh.rotation.copy(d.rotation);
-
-        groupRef.current!.add(mesh);
+        instancedMesh.setMatrixAt(i, dummyMatrix);
       }
     });
+
+    instancedMesh.instanceMatrix.needsUpdate = true;
+    if (instancedMesh.instanceColor) {
+      instancedMesh.instanceColor.needsUpdate = true;
+    }
 
     // Check completion
     if (aliveCount === 0 && !completedRef.current) {
@@ -145,5 +199,5 @@ export function DebrisEffect({ cells, combo, onComplete }: DebrisEffectProps) {
     }
   });
 
-  return <group ref={groupRef} />;
+  return <primitive ref={instancedRef} object={instancedMesh} />;
 }

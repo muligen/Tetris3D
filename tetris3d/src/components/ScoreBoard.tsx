@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { NextPiecePreview } from './NextPiecePreview';
 import { PieceType } from '../game/shapes';
 
@@ -10,7 +11,7 @@ interface ScoreBoardProps {
   remainingTime?: number;
 }
 
-export function ScoreBoard({ score, highScore, level, lines, nextPieceType, remainingTime }: ScoreBoardProps) {
+export const ScoreBoard = memo(function ScoreBoard({ score, highScore, level, lines, nextPieceType, remainingTime }: ScoreBoardProps) {
   const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -48,4 +49,4 @@ export function ScoreBoard({ score, highScore, level, lines, nextPieceType, rema
       </div>
     </div>
   );
-}
+});

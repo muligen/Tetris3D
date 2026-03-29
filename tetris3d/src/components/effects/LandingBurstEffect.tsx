@@ -2,12 +2,13 @@ import { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
-interface Particle {
+interface ParticleData {
   position: THREE.Vector3;
   velocity: THREE.Vector3;
   life: number;
   maxLife: number;
   size: number;
+  initialSize: number;
 }
 
 interface LandingBurstEffectProps {
@@ -26,9 +27,10 @@ export function LandingBurstEffect({
   intensity,
   onComplete,
 }: LandingBurstEffectProps) {
-  const particlesRef = useRef<Particle[]>([]);
+  const particlesRef = useRef<ParticleData[]>([]);
   const meshRef = useRef<THREE.Points>(null);
   const completedRef = useRef(false);
+  const aliveCountRef = useRef(0);
 
   // Calculate particle count based on intensity
   const particleCount = useMemo(() => {
@@ -37,7 +39,7 @@ export function LandingBurstEffect({
 
   // Initialize particles
   useEffect(() => {
-    const particles: Particle[] = [];
+    const particles: ParticleData[] = [];
     const baseLife = 300 + Math.random() * 200; // 300-500ms
 
     for (let i = 0; i < particleCount; i++) {
@@ -46,41 +48,54 @@ export function LandingBurstEffect({
       const vy = Math.random() * 0.08;
       const vz = (Math.random() - 0.5) * 0.1 + 0.05; // Slightly toward viewer
 
+      const size = 0.03 + Math.random() * 0.06;
+
       particles.push({
         position: new THREE.Vector3(...position),
         velocity: new THREE.Vector3(vx, vy, vz),
         life: 0,
         maxLife: baseLife + Math.random() * 200,
-        size: 0.03 + Math.random() * 0.06,
+        size,
+        initialSize: size,
       });
     }
     particlesRef.current = particles;
     completedRef.current = false;
+    aliveCountRef.current = particleCount;
   }, [position, particleCount]);
 
-  // Create geometry and material
-  const [geometry, material] = useMemo(() => {
+  // Create geometry with pre-allocated buffers
+  const geometry = useMemo(() => {
     const geo = new THREE.BufferGeometry();
     const positions = new Float32Array(MAX_PARTICLES * 3);
     const sizes = new Float32Array(MAX_PARTICLES);
-    const alphas = new Float32Array(MAX_PARTICLES);
 
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geo.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-    geo.setAttribute('alpha', new THREE.BufferAttribute(alphas, 1));
 
-    // Create material with custom shader for glow effect
-    const mat = new THREE.PointsMaterial({
+    return geo;
+  }, []);
+
+  // Create material (reused)
+  const material = useMemo(() => {
+    return new THREE.PointsMaterial({
       color: new THREE.Color(color),
       size: 0.1,
       transparent: true,
       opacity: 0.9,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
+      sizeAttenuation: true,
     });
-
-    return [geo, mat];
   }, [color]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+      material.dispose();
+    };
+  }, [geometry, material]);
 
   // Animation loop
   useFrame((_, delta) => {
@@ -92,8 +107,12 @@ export function LandingBurstEffect({
 
     let aliveCount = 0;
     const gravity = -0.002; // Gravity per frame
+    let needsUpdate = false;
 
-    particles.forEach((particle, i) => {
+    // Batch update all particles
+    for (let i = 0; i < particles.length; i++) {
+      const particle = particles[i];
+
       if (particle.life < particle.maxLife) {
         particle.life += delta * 1000;
         aliveCount++;
@@ -105,28 +124,44 @@ export function LandingBurstEffect({
         particle.velocity.y += gravity;
 
         // Update buffer
-        positions[i * 3] = particle.position.x;
-        positions[i * 3 + 1] = particle.position.y;
-        positions[i * 3 + 2] = particle.position.z;
+        const i3 = i * 3;
+        positions[i3] = particle.position.x;
+        positions[i3 + 1] = particle.position.y;
+        positions[i3 + 2] = particle.position.z;
 
-        // Fade out size
+        // Fade out size (optimized calculation)
         const lifeRatio = particle.life / particle.maxLife;
-        sizes[i] = particle.size * (1 - lifeRatio * 0.7);
-      } else {
-        // Hide dead particles
-        positions[i * 3] = 0;
-        positions[i * 3 + 1] = -1000; // Move off-screen
-        positions[i * 3 + 2] = 0;
+        particle.size = particle.initialSize * (1 - lifeRatio * 0.7);
+        sizes[i] = particle.size;
+
+        needsUpdate = true;
+      } else if (particle.size > 0) {
+        // Hide dead particles (only once)
+        const i3 = i * 3;
+        positions[i3] = 0;
+        positions[i3 + 1] = -1000; // Move off-screen
+        positions[i3 + 2] = 0;
         sizes[i] = 0;
+        particle.size = 0; // Mark as hidden
+        needsUpdate = true;
       }
-    });
+    }
 
-    geometry.attributes.position.needsUpdate = true;
-    geometry.attributes.size.needsUpdate = true;
+    // Only flag for update if something changed
+    if (needsUpdate) {
+      geometry.attributes.position.needsUpdate = true;
+      geometry.attributes.size.needsUpdate = true;
+    }
 
-    // Update material opacity based on alive particles
-    material.opacity = Math.max(0.1, (aliveCount / particles.length) * 0.9);
+    // Update material opacity based on alive particles (only if changed)
+    const prevAliveCount = aliveCountRef.current;
+    aliveCountRef.current = aliveCount;
 
+    if (aliveCount !== prevAliveCount) {
+      material.opacity = Math.max(0.1, (aliveCount / particles.length) * 0.9);
+    }
+
+    // Update mesh visibility (only if needed)
     if (meshRef.current) {
       meshRef.current.visible = aliveCount > 0;
     }

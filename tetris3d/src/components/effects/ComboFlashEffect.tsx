@@ -36,6 +36,14 @@ export function ComboFlashEffect({ intensity, duration = 200 }: ComboFlashEffect
     });
   }, []);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+      material.dispose();
+    };
+  }, [geometry, material]);
+
   useFrame(() => {
     if (!meshRef.current || intensity <= 0) {
       if (meshRef.current) {

@@ -160,6 +160,17 @@ export function LineClearEffect({
     });
   }, [rows, glowMeshes]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Dispose all glow meshes
+      glowMeshes.forEach(mesh => {
+        mesh.geometry.dispose();
+        (mesh.material as THREE.Material).dispose();
+      });
+    };
+  }, [glowMeshes]);
+
   return (
     <group ref={groupRef}>
       {/* Flash effects */}
@@ -279,6 +290,14 @@ function EnhancedParticles({ rows, colors, countPerRow }: EnhancedParticlesProps
 
     return [geo, mat];
   }, [rows.length, countPerRow]);
+
+  // Cleanup geometry and material on unmount
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+      material.dispose();
+    };
+  }, [geometry, material]);
 
   useFrame(() => {
     if (!particlesRef.current || !particlesDataRef.current) return;

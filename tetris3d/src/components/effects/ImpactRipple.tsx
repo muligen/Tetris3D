@@ -1,4 +1,4 @@
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { BOARD_WIDTH, BLOCK_SIZE } from '../../game/Board';
@@ -44,6 +44,14 @@ export function ImpactRipple({
   const finalScale = useMemo(() => {
     return BOARD_WIDTH * BLOCK_SIZE * 1.5;
   }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+      material.dispose();
+    };
+  }, [geometry, material]);
 
   // Animation loop
   useFrame(() => {

@@ -188,6 +188,48 @@ export function GameBoard({ board, currentPiece }: GameBoardProps) {
     }
   }, [landingImpact]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Dispose board mesh and all its children
+      boardMesh.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          object.geometry.dispose();
+          if (Array.isArray(object.material)) {
+            object.material.forEach(mat => mat.dispose());
+          } else {
+            object.material.dispose();
+          }
+        } else if (object instanceof THREE.Line) {
+          object.geometry.dispose();
+          (object.material as THREE.Material).dispose();
+        }
+      });
+
+      // Dispose placed pieces meshes
+      placedPiecesRef.current.forEach((data) => {
+        data.mesh.geometry.dispose();
+        if (Array.isArray(data.mesh.material)) {
+          data.mesh.material.forEach(mat => mat.dispose());
+        } else {
+          data.mesh.material.dispose();
+        }
+        data.mesh.dispose();
+      });
+      placedPiecesRef.current.clear();
+
+      // Dispose material cache
+      materialCache.current.forEach((mat) => {
+        mat.dispose();
+      });
+      materialCache.current.clear();
+
+      // Dispose shared geometries
+      blockGeometry.dispose();
+      pieceGeometry.dispose();
+    };
+  }, [boardMesh, blockGeometry, pieceGeometry]);
+
   // Update placed pieces mesh - optimized to reuse InstancedMesh
   const updatePlacedPieces = () => {
     const occupiedCells = board.getOccupiedCells();

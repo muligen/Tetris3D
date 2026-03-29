@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, memo } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
@@ -15,6 +15,7 @@ import { LineClearEffect } from './effects/LineClearEffect';
 import { LandingBurstEffect } from './effects/LandingBurstEffect';
 import { ImpactRipple } from './effects/ImpactRipple';
 import { ComboFlashEffect } from './effects/ComboFlashEffect';
+import { PerformanceMonitor } from './PerformanceMonitor';
 
 // Screen shake component
 function ScreenShake() {
@@ -45,8 +46,8 @@ function ScreenShake() {
   return null;
 }
 
-// Landing effects component
-function LandingEffects() {
+// Memoized landing effects component
+const LandingEffects = memo(function LandingEffects() {
   const landingImpact = useTetrisStore((state) => state.landingImpact);
 
   if (!landingImpact) return null;
@@ -68,19 +69,10 @@ function LandingEffects() {
       />
     </>
   );
-}
+});
 
-// Game scene component
-function GameScene() {
-  const game = useTetrisStore((state) => state.game);
-  const clearedRows = useTetrisStore((state) => state.clearedRows);
-  const lineClearEnhanced = useTetrisStore((state) => state.lineClearEnhanced);
-  const comboFlashIntensity = useTetrisStore((state) => state.comboFlashIntensity);
-  const clearLineClear = useTetrisStore((state) => state.clearLineClear);
-  const clearLineClearEnhanced = useTetrisStore((state) => state.clearLineClearEnhanced);
-
-  if (!game) return null;
-
+// Static scene elements (background, lighting, camera)
+const GameSceneStatic = memo(function GameSceneStatic() {
   return (
     <>
       {/* Enhanced background */}
@@ -91,12 +83,46 @@ function GameScene() {
       <directionalLight position={[5, 10, 5]} intensity={0.8} castShadow />
       <pointLight position={[0, 8, 0]} intensity={0.5} />
 
+      {/* Camera controls */}
+      <OrbitControls
+        enablePan={false}
+        enableZoom={false}
+        enableRotate={false}
+        target={[5, 9.5, 0]}
+      />
+    </>
+  );
+});
+
+// Game board and effects - subscribes to game state
+const GameSceneContent = memo(function GameSceneContent() {
+  const game = useTetrisStore((state) => state.game);
+
+  if (!game) return null;
+
+  return (
+    <>
       {/* Game board */}
       <GameBoard board={game.getBoard()} currentPiece={game.getCurrentPiece()} />
 
       {/* Landing impact effects */}
       <LandingEffects />
 
+      {/* Screen shake */}
+      <ScreenShake />
+    </>
+  );
+});
+
+// Line clear effects - subscribes only to line clear state
+const GameSceneLineEffects = memo(function GameSceneLineEffects() {
+  const clearedRows = useTetrisStore((state) => state.clearedRows);
+  const lineClearEnhanced = useTetrisStore((state) => state.lineClearEnhanced);
+  const clearLineClear = useTetrisStore((state) => state.clearLineClear);
+  const clearLineClearEnhanced = useTetrisStore((state) => state.clearLineClearEnhanced);
+
+  return (
+    <>
       {/* Line clear effects - use enhanced version if available */}
       {lineClearEnhanced ? (
         <LineClearEffect
@@ -111,27 +137,44 @@ function GameScene() {
           onComplete={clearLineClear}
         />
       ) : null}
-
-      {/* Combo flash effect */}
-      {comboFlashIntensity > 0 && (
-        <ComboFlashEffect intensity={comboFlashIntensity} />
-      )}
-
-      {/* Screen shake */}
-      <ScreenShake />
-
-      {/* Camera controls */}
-      <OrbitControls
-        enablePan={false}
-        enableZoom={false}
-        enableRotate={false}
-        target={[5, 9.5, 0]}
-      />
     </>
   );
-}
+});
+
+// Combo flash effect - subscribes only to combo flash state
+const GameSceneComboEffect = memo(function GameSceneComboEffect() {
+  const comboFlashIntensity = useTetrisStore((state) => state.comboFlashIntensity);
+
+  if (comboFlashIntensity <= 0) return null;
+
+  return <ComboFlashEffect intensity={comboFlashIntensity} />;
+});
+
+// Game scene component - composition of smaller components
+const GameScene = memo(function GameScene() {
+  const game = useTetrisStore((state) => state.game);
+
+  if (!game) return null;
+
+  return (
+    <>
+      {/* Static scene elements */}
+      <GameSceneStatic />
+
+      {/* Game board and effects */}
+      <GameSceneContent />
+
+      {/* Line clear effects */}
+      <GameSceneLineEffects />
+
+      {/* Combo flash effect */}
+      <GameSceneComboEffect />
+    </>
+  );
+});
 
 export function Game() {
+  // Use shallow comparison for multiple selectors
   const game = useTetrisStore((state) => state.game);
   const highScore = useTetrisStore((state) => state.highScore);
   const currentMode = useTetrisStore((state) => state.currentMode);
@@ -265,6 +308,8 @@ export function Game() {
 
       {/* UI Overlay */}
       <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10, color: '#fff', fontFamily: 'monospace' }}>
+        {/* Performance Monitor (FPS counter) */}
+        <PerformanceMonitor />
         {/* Top toolbar */}
         <div style={{ position: 'absolute', top: 8, left: 8, right: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', pointerEvents: 'auto', gap: 8 }}>
           {/* Mode selector */}

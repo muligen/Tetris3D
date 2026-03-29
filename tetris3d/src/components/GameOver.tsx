@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { GameMode } from '../game/GameMode';
 import { useTetrisStore } from '../stores/tetrisStore';
 
@@ -9,7 +10,7 @@ interface GameOverProps {
   onRestart: () => void;
 }
 
-export function GameOver({ score, level, lines, mode, onRestart }: GameOverProps) {
+export const GameOver = memo(function GameOver({ score, level, lines, mode, onRestart }: GameOverProps) {
   const getModeName = (mode: GameMode): string => {
     switch (mode) {
       case GameMode.CLASSIC:
@@ -72,4 +73,4 @@ export function GameOver({ score, level, lines, mode, onRestart }: GameOverProps
       </div>
     </div>
   );
-}
+});
