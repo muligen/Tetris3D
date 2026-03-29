@@ -1,9 +1,21 @@
 import { Piece } from './Piece.ts';
 import { Board } from './Board.ts';
 import { randomPieceType, PieceType } from './shapes.ts';
-import { GameMode, GameModeConfig, GAME_MODES } from './GameMode';
+import { GameMode, GameModeConfig, GAME_MODES, BombConfig, mergeBombConfig } from './GameMode';
 
 export type GameState = 'playing' | 'paused' | 'gameover';
+
+export interface ExplosionEvent {
+  centers: Array<[x: number, y: number]>;
+  affectedCells: Array<[x: number, y: number]>;
+  depth: number;
+}
+
+// 待处理的爆炸
+interface PendingExplosion {
+  bombPositions: Array<[x: number, y: number]>;
+  delay: number; // 剩余延迟时间 ms
+}
 
 export class TetrisGame {
   private board: Board;
@@ -16,15 +28,21 @@ export class TetrisGame {
   private dropInterval: number = 1000; // 毫秒
   private lastDropTime: number = 0;
   private modeConfig: GameModeConfig;
+  private bombConfig: BombConfig;
   private elapsedTime: number = 0; // For timed modes
   private onLinesCleared: ((lines: number, rows: number[], rowColors?: number[][]) => void) | null = null;
   private onPiecePlaced: ((cells: number[][], color: number, isHardDrop: boolean) => void) | null = null;
   private onGameOver: (() => void) | null = null;
+  private onBombExplosion: ((event: ExplosionEvent) => void) | null = null;
   private wasHardDrop: boolean = false;
+  private pendingBombRewards: number = 0; // 待发放的炸弹奖励（给下一个方块）
+  private pendingExplosion: PendingExplosion | null = null; // 待处理的爆炸（延迟1秒）
+  private onBombCountdown: ((positions: Array<[x: number, y: number]>, remaining: number) => void) | null = null;
 
   constructor(mode: GameMode = GameMode.CLASSIC) {
     this.board = new Board();
     this.modeConfig = GAME_MODES[mode];
+    this.bombConfig = mergeBombConfig(this.modeConfig.bombConfig);
     this.level = this.modeConfig.startLevel;
     this.dropInterval = this.calculateDropInterval(this.level);
     this.nextPieceType = randomPieceType();
@@ -49,6 +67,14 @@ export class TetrisGame {
     this.onGameOver = callback;
   }
 
+  setOnBombExplosion(callback: (event: ExplosionEvent) => void): void {
+    this.onBombExplosion = callback;
+  }
+
+  setOnBombCountdown(callback: (positions: Array<[x: number, y: number]>, remaining: number) => void): void {
+    this.onBombCountdown = callback;
+  }
+
   // Get current game mode
   getMode(): GameMode {
     return this.modeConfig.mode;
@@ -57,6 +83,11 @@ export class TetrisGame {
   // Get mode config
   getModeConfig(): GameModeConfig {
     return this.modeConfig;
+  }
+
+  // Get bomb config
+  getBombConfig(): BombConfig {
+    return this.bombConfig;
   }
 
   // Get elapsed time (for timed modes)
@@ -85,11 +116,31 @@ export class TetrisGame {
     this.currentPiece = new Piece(this.nextPieceType || undefined);
     this.nextPieceType = randomPieceType();
 
+    // 应用 combo 奖励的待发放炸弹
+    if (this.pendingBombRewards > 0) {
+      const cells = this.currentPiece.getCells();
+      for (let s = 0; s < this.pendingBombRewards; s++) {
+        if (this.currentPiece.getBombCount() >= this.bombConfig.maxBombsPerPiece) break;
+        const availableIndices = cells.map((_, i) => i).filter(i => !this.currentPiece!.hasBombAt(i));
+        if (availableIndices.length === 0) break;
+        const idx = availableIndices[Math.floor(Math.random() * availableIndices.length)];
+        this.currentPiece.addBomb(idx);
+      }
+      this.pendingBombRewards = 0;
+    }
+
     // 检查游戏是否结束
     if (!this.isValidPosition()) {
       this.state = 'gameover';
       if (this.onGameOver) this.onGameOver();
     }
+  }
+
+  // Combo 奖励：记录待发放的炸弹（下次生成方块时应用）
+  grantBombReward(combo: number): boolean {
+    if (combo < this.bombConfig.comboBombThreshold) return false;
+    this.pendingBombRewards += this.bombConfig.comboBombSlots;
+    return true;
   }
 
   // 检查当前位置是否有效
@@ -115,6 +166,25 @@ export class TetrisGame {
       this.state = 'gameover';
       if (this.onGameOver) this.onGameOver();
       return;
+    }
+
+    // 处理待爆炸的炸弹（延迟倒计时）
+    if (this.pendingExplosion) {
+      this.pendingExplosion.delay -= deltaTime;
+      // 通知 UI 更新倒计时
+      if (this.onBombCountdown) {
+        this.onBombCountdown(this.pendingExplosion.bombPositions, Math.max(0, this.pendingExplosion.delay));
+      }
+      if (this.pendingExplosion.delay <= 0) {
+        const bombs = this.pendingExplosion.bombPositions;
+        this.pendingExplosion = null;
+        // 执行爆炸
+        this.executeChainExplosion(bombs, 0);
+        this.postExplosionCheckLines();
+        // 爆炸完成后生成新方块
+        this.spawnNewPiece();
+      }
+      return; // 爆炸等待期间不处理下落
     }
 
     this.lastDropTime += deltaTime;
@@ -166,6 +236,7 @@ export class TetrisGame {
 
     const cells = this.currentPiece.getCells();
     const color = this.currentPiece.getColor();
+    const bombIndices = this.currentPiece.getBombCellIndices();
 
     // 检查是否在有效位置
     if (cells.some(([x, y]) => x < 0 || x >= 10 || y < 0 || y >= 20)) {
@@ -174,7 +245,12 @@ export class TetrisGame {
       return;
     }
 
-    this.board.placePiece(cells, color);
+    // 放置方块（含炸弹信息）
+    if (bombIndices.length > 0) {
+      this.board.placePieceWithBombs(cells, color, bombIndices, 'random');
+    } else {
+      this.board.placePiece(cells, color);
+    }
 
     // Trigger piece placed callback with landing info
     if (this.onPiecePlaced) {
@@ -193,10 +269,79 @@ export class TetrisGame {
       if (this.onLinesCleared) {
         this.onLinesCleared(result.linesCleared, result.clearedRows, result.clearedRowColors);
       }
+
+      // 处理炸弹爆炸：如果有炸弹，延迟1秒再爆炸
+      if (result.bombPositions.length > 0) {
+        this.pendingExplosion = {
+          bombPositions: result.bombPositions,
+          delay: this.bombConfig.explosionDelay,
+        };
+        // 通知 UI 显示倒计时
+        if (this.onBombCountdown) {
+          this.onBombCountdown(result.bombPositions, this.bombConfig.explosionDelay);
+        }
+        // 不立即生成新方块，等爆炸完成后再生成
+        return;
+      }
     }
 
     // 生成新方块
     this.spawnNewPiece();
+  }
+
+  // 执行连锁爆炸
+  private executeChainExplosion(
+    bombPositions: Array<[x: number, y: number]>,
+    depth: number
+  ): void {
+    if (depth >= this.bombConfig.maxChainDepth) return;
+    if (bombPositions.length === 0) return;
+
+    // 计算爆炸范围
+    const { affectedCells, chainBombs } = this.board.detonateAt(
+      bombPositions,
+      this.bombConfig.explosionRange
+    );
+
+    if (affectedCells.length === 0) return;
+
+    // 触发爆炸回调（通知渲染层）
+    if (this.onBombExplosion) {
+      this.onBombExplosion({
+        centers: bombPositions,
+        affectedCells,
+        depth,
+      });
+    }
+
+    // 移除受影响的格子并应用重力
+    this.board.removeCellsAndApplyGravity(affectedCells);
+
+    // 爆炸计分
+    const explosionScore = affectedCells.length * 50 * (depth + 1);
+    this.score += explosionScore;
+
+    // 连锁反应
+    if (chainBombs.length > 0 && this.bombConfig.chainReactionEnabled) {
+      this.executeChainExplosion(chainBombs, depth + 1);
+    }
+  }
+
+  // 爆炸后重新检查满行
+  private postExplosionCheckLines(): void {
+    const result = this.board.checkLines();
+    if (result.linesCleared > 0) {
+      this.addScore(result.linesCleared);
+      // 检查新消除的行中是否有更多炸弹
+      const bombPositions = this.board.getBombPositionsInRows(result.clearedRows);
+      if (this.onLinesCleared) {
+        this.onLinesCleared(result.linesCleared, result.clearedRows, result.clearedRowColors);
+      }
+      if (bombPositions.length > 0) {
+        this.executeChainExplosion(bombPositions, 0);
+        this.postExplosionCheckLines();
+      }
+    }
   }
 
   // 移动左
@@ -302,6 +447,7 @@ export class TetrisGame {
   // Switch to a different mode
   switchMode(mode: GameMode): void {
     this.modeConfig = GAME_MODES[mode];
+    this.bombConfig = mergeBombConfig(this.modeConfig.bombConfig);
     this.level = this.modeConfig.startLevel;
     this.dropInterval = this.calculateDropInterval(this.level);
     this.restart();

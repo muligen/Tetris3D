@@ -8,6 +8,7 @@ export class Piece {
   private y: number;
   private rotation: number;
   private color: number;
+  private bombs: Set<number> = new Set(); // 存储带炸弹的格子索引
 
   constructor(type?: PieceType) {
     this.type = type ?? randomPieceType();
@@ -84,11 +85,45 @@ export class Piece {
     newPiece.x = this.x;
     newPiece.y = this.y;
     newPiece.rotation = this.rotation;
+    // 复制炸弹信息
+    newPiece.bombs = new Set(this.bombs);
     return newPiece;
   }
 
   // 获取位置
   getPosition(): { x: number; y: number } {
     return { x: this.x, y: this.y };
+  }
+
+  // === 炸弹相关方法 ===
+
+  // 为指定格子添加炸弹
+  addBomb(cellIndex: number): boolean {
+    // 检查是否已存在炸弹
+    if (this.bombs.has(cellIndex)) {
+      return false;
+    }
+    this.bombs.add(cellIndex);
+    return true;
+  }
+
+  // 检查指定格子是否有炸弹
+  hasBombAt(cellIndex: number): boolean {
+    return this.bombs.has(cellIndex);
+  }
+
+  // 获取所有炸弹格子的索引
+  getBombCellIndices(): number[] {
+    return Array.from(this.bombs);
+  }
+
+  // 获取炸弹数量
+  getBombCount(): number {
+    return this.bombs.size;
+  }
+
+  // 清除所有炸弹
+  clearBombs(): void {
+    this.bombs.clear();
   }
 }

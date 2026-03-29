@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { TetrisGame } from '../game/TetrisGame';
+import { TetrisGame, ExplosionEvent } from '../game/TetrisGame';
 import { GameMode } from '../game/GameMode';
 import { getHighScore, saveHighScore } from '../services/highScoreService';
 import { getAudioService } from '../services/audioService';
@@ -24,6 +24,14 @@ interface LineClearEnhancedState {
   timestamp: number;        // When the effect was triggered
 }
 
+// Explosion effect state
+export interface ExplosionState {
+  centers: Array<[number, number]>;
+  affectedCells: Array<[number, number]>;
+  depth: number;
+  timestamp: number;
+}
+
 interface TetrisState {
   game: TetrisGame | null;
   version: number;
@@ -44,6 +52,10 @@ interface TetrisState {
   lineClearEnhanced: LineClearEnhancedState | null;
   // Combo flash effect
   comboFlashIntensity: number;
+  // Explosion effect
+  explosionEffect: ExplosionState | null;
+  // Bomb countdown (pending explosion with visual warning)
+  bombCountdown: { positions: Array<[number, number]>; remaining: number } | null;
   init: () => void;
   moveLeft: () => void;
   moveRight: () => void;
@@ -71,6 +83,9 @@ interface TetrisState {
   clearLineClearEnhanced: () => void;
   triggerComboFlash: (combo: number) => void;
   updateComboFlash: (deltaTime: number) => number;
+  // Explosion methods
+  triggerExplosionEffect: (event: ExplosionEvent) => void;
+  clearExplosionEffect: () => void;
 }
 
 export const useTetrisStore = create<TetrisState>((set, get) => {
@@ -127,6 +142,9 @@ export const useTetrisStore = create<TetrisState>((set, get) => {
     lineClearEnhanced: null,
     // Combo flash
     comboFlashIntensity: 0,
+    // Explosion effect
+    explosionEffect: null,
+    bombCountdown: null,
 
     init: () => {
       const game = new TetrisGame(get().currentMode);
@@ -156,6 +174,9 @@ export const useTetrisStore = create<TetrisState>((set, get) => {
         if (newCombo >= 2) {
           get().triggerComboFlash(newCombo);
         }
+
+        // Combo 奖励炸弹
+        game.grantBombReward(newCombo);
 
         // Calculate intensity based on lines and combo
         let baseIntensity = lines * 0.3;
@@ -202,6 +223,18 @@ export const useTetrisStore = create<TetrisState>((set, get) => {
           game.getMode(),
           game.getElapsedTime()
         );
+      });
+
+      game.setOnBombExplosion((event: ExplosionEvent) => {
+        get().triggerExplosionEffect(event);
+        // 爆炸震动
+        const bombConfig = game.getBombConfig();
+        get().triggerScreenShake(bombConfig.explosionShakeIntensity * (event.depth + 1));
+      });
+
+      game.setOnBombCountdown((positions: Array<[number, number]>, remaining: number) => {
+        set({ bombCountdown: { positions, remaining } });
+        get().triggerUpdate();
       });
 
       set({ game, version: 0, highScore: getHighScore() });
@@ -320,6 +353,25 @@ export const useTetrisStore = create<TetrisState>((set, get) => {
       return newIntensity;
     },
 
+    // Trigger explosion effect
+    triggerExplosionEffect: (event: ExplosionEvent) => {
+      set({
+        explosionEffect: {
+          centers: event.centers,
+          affectedCells: event.affectedCells,
+          depth: event.depth,
+          timestamp: Date.now(),
+        },
+        bombCountdown: null, // 爆炸触发时立即清除倒计时，炸弹消失
+      });
+      get().triggerUpdate();
+    },
+
+    // Clear explosion effect
+    clearExplosionEffect: () => {
+      set({ explosionEffect: null, bombCountdown: null });
+    },
+
     moveLeft: () => {
       const { game } = get();
       if (game) {
@@ -372,6 +424,8 @@ export const useTetrisStore = create<TetrisState>((set, get) => {
           lineClearEnhanced: null,
           comboFlashIntensity: 0,
           clearedRows: [],
+          explosionEffect: null,
+          bombCountdown: null,
         });
         get().triggerUpdate();
       }

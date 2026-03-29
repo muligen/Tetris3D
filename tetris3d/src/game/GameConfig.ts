@@ -1,6 +1,10 @@
 /**
- * Game Mode definitions and configurations
+ * 游戏配置集中管理
+ *
+ * 这个文件集中管理所有游戏配置，包括炸弹系统和游戏模式配置。
  */
+
+import { GameMode, GameModeConfig, GAME_MODES } from './GameMode';
 
 // 炸弹配置接口
 export interface BombConfig {
@@ -34,7 +38,7 @@ export const DEFAULT_BOMB_CONFIG: BombConfig = {
   randomBombChance: 0.1,
   maxBombsPerPiece: 1,
   explosionRange: 1,
-  explosionDelay: 1000,
+  explosionDelay: 300,
   chainReactionEnabled: true,
   maxChainDepth: 10,
   explosionParticles: true,
@@ -48,53 +52,12 @@ export function mergeBombConfig(modeConfig?: Partial<BombConfig>): BombConfig {
   return { ...DEFAULT_BOMB_CONFIG, ...modeConfig };
 }
 
-export enum GameMode {
-  CLASSIC = 'classic',
-  CHALLENGE = 'challenge',
-  MARATHON = 'marathon'
+// 获取指定模式的完整炸弹配置
+export function getBombConfigForMode(mode: GameMode): BombConfig {
+  const modeConfig = GAME_MODES[mode];
+  return mergeBombConfig(modeConfig.bombConfig);
 }
 
-export interface GameModeConfig {
-  mode: GameMode;
-  name: string;
-  description: string;
-  timeLimit?: number; // seconds, undefined = unlimited
-  startLevel: number;
-  levelInterval: number; // lines per level increase
-  bombConfig?: Partial<BombConfig>; // 各模式可覆盖默认配置
-}
-
-export const GAME_MODES: Record<GameMode, GameModeConfig> = {
-  [GameMode.CLASSIC]: {
-    mode: GameMode.CLASSIC,
-    name: 'Classic',
-    description: 'Classic Tetris gameplay. Take your time, plan ahead, and aim for the high score!',
-    timeLimit: undefined,
-    startLevel: 1,
-    levelInterval: 10,
-  },
-  [GameMode.CHALLENGE]: {
-    mode: GameMode.CHALLENGE,
-    name: 'Challenge',
-    description: 'Race against the clock! 3 minutes to score as much as possible. Starts at level 5.',
-    timeLimit: 180, // 3 minutes
-    startLevel: 5,
-    levelInterval: 5,
-  },
-  [GameMode.MARATHON]: {
-    mode: GameMode.MARATHON,
-    name: 'Marathon',
-    description: 'Endless mode with no time limit. How far can you go?',
-    timeLimit: undefined,
-    startLevel: 1,
-    levelInterval: 15,
-  },
-};
-
-export function getGameModeConfig(mode: GameMode): GameModeConfig {
-  return GAME_MODES[mode];
-}
-
-export function getAllGameModes(): GameModeConfig[] {
-  return Object.values(GAME_MODES);
-}
+// 导出所有类型和配置
+export type { GameModeConfig };
+export { GameMode, GAME_MODES };

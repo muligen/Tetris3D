@@ -6,6 +6,10 @@ import { Piece } from '../game/Piece';
 import { useTetrisStore } from '../stores/tetrisStore';
 import { Easing } from '../utils/animation';
 
+// Bomb indicator geometry (shared, small sphere)
+const BOMB_GEOMETRY = new THREE.SphereGeometry(0.15, 8, 8);
+const BOMB_FUSE_GEOMETRY = new THREE.CylinderGeometry(0.03, 0.03, 0.15, 4);
+
 interface GameBoardProps {
   board: Board;
   currentPiece: Piece | null;
@@ -55,6 +59,8 @@ export function GameBoard({ board, currentPiece }: GameBoardProps) {
   const landingImpact = useTetrisStore((state) => state.landingImpact);
   // Subscribe to version to detect game state changes every frame
   const version = useTetrisStore((state) => state.version);
+  // Bomb countdown state
+  const bombCountdown = useTetrisStore((state) => state.bombCountdown);
 
   // Shared geometry for all blocks (cached as singleton)
   const blockGeometry = useMemo(() => new THREE.BoxGeometry(
@@ -389,6 +395,96 @@ export function GameBoard({ board, currentPiece }: GameBoardProps) {
     });
   };
 
+  // Update bomb indicators on placed pieces + countdown bombs
+  const updatePlacedBombs = () => {
+    if (!meshRef.current) return;
+
+    let bombGroup = meshRef.current.children.find(
+      c => c.userData?.isPlacedBombIndicator
+    ) as THREE.Group | undefined;
+
+    // 棋盘上还存在的炸弹
+    const boardBombs = board.getOccupiedCellsWithData().filter(
+      ([, , cell]) => cell.bomb
+    ).map(([x, y]) => [x, y] as [number, number]);
+
+    // 倒计时中的炸弹（已被消行移除，但需要保持可见）
+    const countdownBombs: Array<[number, number]> = bombCountdown
+      ? bombCountdown.positions
+      : [];
+
+    const allBombPositions: Array<[number, number]> = [...boardBombs];
+
+    // 添加倒计时炸弹（去重）
+    const existingSet = new Set(boardBombs.map(([x, y]) => `${x},${y}`));
+    for (const pos of countdownBombs) {
+      if (!existingSet.has(`${pos[0]},${pos[1]}`)) {
+        allBombPositions.push(pos);
+      }
+    }
+
+    if (allBombPositions.length === 0) {
+      if (bombGroup) {
+        meshRef.current.remove(bombGroup);
+      }
+      return;
+    }
+
+    if (!bombGroup) {
+      bombGroup = new THREE.Group();
+      bombGroup.userData.isPlacedBombIndicator = true;
+      meshRef.current.add(bombGroup);
+    }
+
+    // 倒计时闪烁：接近爆炸时加速闪烁
+    const isCountdown = bombCountdown !== null;
+    const flashIntensity = isCountdown
+      ? Math.max(0.3, Math.sin(Date.now() * 0.015) * 0.5 + 0.5)
+      : 0;
+
+    const bombMaterial = new THREE.MeshStandardMaterial({
+      color: isCountdown ? 0xff0000 : 0xff6600,
+      emissive: isCountdown ? 0xff0000 : 0xff3300,
+      emissiveIntensity: isCountdown ? flashIntensity : 0.4,
+      roughness: 0.3,
+      metalness: 0.7,
+    });
+    const fuseMaterial = new THREE.MeshStandardMaterial({
+      color: isCountdown ? 0xff0000 : 0x654321,
+      emissive: isCountdown ? 0xff3300 : 0x000000,
+      emissiveIntensity: isCountdown ? flashIntensity * 0.5 : 0,
+      roughness: 0.8,
+    });
+
+    // Rebuild bomb indicators
+    while (bombGroup.children.length > 0) {
+      bombGroup.remove(bombGroup.children[0]);
+    }
+
+    allBombPositions.forEach(([x, y]) => {
+      const flippedY = (BOARD_HEIGHT - 1 - y) * BLOCK_SIZE + BLOCK_SIZE / 2;
+
+      const sphere = new THREE.Mesh(BOMB_GEOMETRY, bombMaterial);
+      sphere.position.set(
+        x * BLOCK_SIZE + BLOCK_SIZE / 2,
+        flippedY,
+        BLOCK_SIZE * 0.5,
+      );
+      const scale = isCountdown ? 0.8 + flashIntensity * 0.4 : 1;
+      sphere.scale.setScalar(scale);
+      bombGroup!.add(sphere);
+
+      const fuse = new THREE.Mesh(BOMB_FUSE_GEOMETRY, fuseMaterial);
+      fuse.position.set(
+        x * BLOCK_SIZE + BLOCK_SIZE / 2,
+        flippedY + 0.15,
+        BLOCK_SIZE * 0.5,
+      );
+      fuse.scale.setScalar(isCountdown ? 0.6 + flashIntensity * 0.4 : 1);
+      bombGroup!.add(fuse);
+    });
+  };
+
   // Animation frame - update scene every frame
   useFrame(() => {
     if (!meshRef.current || !placedMeshRef.current) return;
@@ -397,10 +493,16 @@ export function GameBoard({ board, currentPiece }: GameBoardProps) {
     if (version !== lastVersionRef.current) {
       lastVersionRef.current = version;
       updatePlacedPieces();
+      updatePlacedBombs();
     }
 
     // 2. Update squash animation (every frame)
     updateSquashAnimation();
+
+    // 2.5 Update bomb countdown animation (every frame when active)
+    if (bombCountdown) {
+      updatePlacedBombs();
+    }
 
     // 3. Update current piece positions
     // Find existing current piece group (tagged with userData)
@@ -449,6 +551,77 @@ export function GameBoard({ board, currentPiece }: GameBoardProps) {
         // Ensure all cubes use the shared material
         mesh.material = material;
       });
+
+      // 5. Bomb indicators on current piece
+      let bombGroup = meshRef.current.children.find(
+        c => c.userData?.isBombIndicator
+      ) as THREE.Group | undefined;
+
+      if (currentPiece.getBombCount() > 0) {
+        if (!bombGroup) {
+          bombGroup = new THREE.Group();
+          bombGroup.userData.isBombIndicator = true;
+          meshRef.current.add(bombGroup);
+        }
+
+        const bombIndices = currentPiece.getBombCellIndices();
+        const bombMaterial = new THREE.MeshStandardMaterial({
+          color: 0xff4400,
+          emissive: 0xff2200,
+          emissiveIntensity: 0.6,
+          roughness: 0.3,
+          metalness: 0.7,
+        });
+        const fuseMaterial = new THREE.MeshStandardMaterial({
+          color: 0x654321,
+          roughness: 0.8,
+        });
+
+        // Remove excess bomb meshes
+        while (bombGroup.children.length > bombIndices.length * 2) {
+          bombGroup.remove(bombGroup.children[bombGroup.children.length - 1]);
+        }
+
+        bombIndices.forEach((cellIdx, i) => {
+          const [x, y] = cells[cellIdx];
+          const flippedY = (BOARD_HEIGHT - 1 - y) * BLOCK_SIZE + BLOCK_SIZE / 2;
+          const basePos: [number, number, number] = [
+            x * BLOCK_SIZE + BLOCK_SIZE / 2,
+            flippedY,
+            BLOCK_SIZE * 0.5,
+          ];
+
+          // Bomb sphere
+          let sphere: THREE.Mesh;
+          let fuse: THREE.Mesh;
+          if (i * 2 < bombGroup!.children.length) {
+            sphere = bombGroup!.children[i * 2] as THREE.Mesh;
+            fuse = bombGroup!.children[i * 2 + 1] as THREE.Mesh;
+          } else {
+            sphere = new THREE.Mesh(BOMB_GEOMETRY, bombMaterial);
+            fuse = new THREE.Mesh(BOMB_FUSE_GEOMETRY, fuseMaterial);
+            bombGroup!.add(sphere);
+            bombGroup!.add(fuse);
+          }
+
+          sphere.position.set(...basePos);
+          sphere.material = bombMaterial;
+
+          // Pulsing animation
+          const pulse = 0.9 + Math.sin(Date.now() * 0.005 + i) * 0.1;
+          sphere.scale.setScalar(pulse);
+
+          fuse.position.set(basePos[0], basePos[1] + 0.15, basePos[2]);
+          fuse.material = fuseMaterial;
+        });
+
+        // Remove extra children if bomb count decreased
+        while (bombGroup.children.length > bombIndices.length * 2) {
+          bombGroup.remove(bombGroup.children[bombGroup.children.length - 1]);
+        }
+      } else if (bombGroup) {
+        meshRef.current.remove(bombGroup);
+      }
     } else if (pieceGroup) {
       // No current piece, remove group
       meshRef.current.remove(pieceGroup);

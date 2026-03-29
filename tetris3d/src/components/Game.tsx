@@ -15,6 +15,7 @@ import { LineClearEffect } from './effects/LineClearEffect';
 import { LandingBurstEffect } from './effects/LandingBurstEffect';
 import { ImpactRipple } from './effects/ImpactRipple';
 import { ComboFlashEffect } from './effects/ComboFlashEffect';
+import { ExplosionEffect } from './effects/ExplosionEffect';
 import { PerformanceMonitor } from './PerformanceMonitor';
 
 // Screen shake component
@@ -153,6 +154,21 @@ const GameSceneComboEffect = memo(function GameSceneComboEffect() {
   return <ComboFlashEffect intensity={comboFlashIntensity} />;
 });
 
+// Explosion effect - subscribes to explosion state
+const GameSceneExplosionEffect = memo(function GameSceneExplosionEffect() {
+  const explosionEffect = useTetrisStore((state) => state.explosionEffect);
+  const clearExplosionEffect = useTetrisStore((state) => state.clearExplosionEffect);
+
+  if (!explosionEffect) return null;
+
+  return (
+    <ExplosionEffect
+      explosion={explosionEffect}
+      onComplete={clearExplosionEffect}
+    />
+  );
+});
+
 // Game scene component - composition of smaller components
 const GameScene = memo(function GameScene() {
   const game = useTetrisStore((state) => state.game);
@@ -172,6 +188,9 @@ const GameScene = memo(function GameScene() {
 
       {/* Combo flash effect */}
       <GameSceneComboEffect />
+
+      {/* Explosion effect */}
+      <GameSceneExplosionEffect />
     </>
   );
 });
@@ -185,6 +204,7 @@ export function Game() {
   const showLeaderboard = useTetrisStore((state) => state.showLeaderboard);
   const showModeSelector = useTetrisStore((state) => state.showModeSelector);
   const comboCount = useTetrisStore((state) => state.comboCount);
+  const explosionEffect = useTetrisStore((state) => state.explosionEffect);
   useTetrisStore((state) => state.version); // Subscribe to version for re-renders
   const requestRef = useRef<number>();
   const previousTimeRef = useRef<number>(0);
@@ -343,6 +363,35 @@ export function Game() {
                 animation: 'pulse 0.5s ease-in-out infinite',
               }}>
                 {comboCount}x COMBO!
+              </div>
+            )}
+            {/* Bomb indicator on current piece */}
+            {game.getCurrentPiece() && game.getCurrentPiece()!.getBombCount() > 0 && (
+              <div style={{
+                padding: '3px 12px',
+                backgroundColor: 'rgba(255, 68, 0, 0.8)',
+                borderRadius: 4,
+                color: '#fff',
+                fontSize: 14,
+                fontWeight: 'bold',
+                textShadow: '0 0 8px rgba(255,68,0,0.8)',
+                animation: 'pulse 0.3s ease-in-out infinite',
+              }}>
+                BOMB x{game.getCurrentPiece()!.getBombCount()}
+              </div>
+            )}
+            {/* Explosion chain indicator */}
+            {explosionEffect && (
+              <div style={{
+                padding: '3px 12px',
+                backgroundColor: 'rgba(255, 0, 0, 0.9)',
+                borderRadius: 4,
+                color: '#ff0',
+                fontSize: 14,
+                fontWeight: 'bold',
+                textShadow: '0 0 8px rgba(255,255,0,0.8)',
+              }}>
+                BOOM!{explosionEffect.depth > 0 ? ` Chain x${explosionEffect.depth + 1}` : ''}
               </div>
             )}
             <button
