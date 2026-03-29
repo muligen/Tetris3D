@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  base: '/Tetris3D/',
   server: {
     port: 5174,
     host: true
