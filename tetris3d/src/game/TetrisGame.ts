@@ -88,6 +88,7 @@ export class TetrisGame {
     // 检查游戏是否结束
     if (!this.isValidPosition()) {
       this.state = 'gameover';
+      if (this.onGameOver) this.onGameOver();
     }
   }
 
