@@ -315,4 +315,33 @@ export class TetrisGame {
   isGameOver(): boolean {
     return this.state === 'gameover';
   }
+
+  // 获取 Ghost Piece 的单元格位置（硬降后的落点）
+  getGhostCells(): number[][] {
+    if (!this.currentPiece) return [];
+
+    // 克隆方块
+    const ghost = this.currentPiece.clone();
+
+    // 向下移动直到无效
+    while (true) {
+      ghost.moveDown();
+      const cells = ghost.getCells();
+      if (!this.isValidPositionForCells(cells)) {
+        ghost.moveUp(); // 回退到最后有效位置
+        break;
+      }
+    }
+
+    return ghost.getCells();
+  }
+
+  // 检查给定单元格位置是否有效
+  private isValidPositionForCells(cells: number[][]): boolean {
+    return cells.every(([x, y]) => {
+      if (x < 0 || x >= 10 || y < 0 || y >= 20) return false;
+      const grid = this.board.getGrid();
+      return grid[y][x] === null;
+    });
+  }
 }

@@ -97,6 +97,9 @@ const GameSceneStatic = memo(function GameSceneStatic() {
 // Game board and effects - subscribes to game state
 const GameSceneContent = memo(function GameSceneContent() {
   const game = useTetrisStore((state) => state.game);
+  // Subscribe to version to ensure re-render when game state changes
+  // (game reference never changes, but internal state like currentPiece does)
+  useTetrisStore((state) => state.version);
 
   if (!game) return null;
 

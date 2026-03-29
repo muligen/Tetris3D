@@ -48,6 +48,9 @@ export function GameBoard({ board, currentPiece }: GameBoardProps) {
   // Material for current piece (reused across frames)
   const currentPieceMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
 
+  // Material for ghost piece (reused across frames)
+  const ghostMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
+
   // Get landing impact state from store
   const landingImpact = useTetrisStore((state) => state.landingImpact);
   // Subscribe to version to detect game state changes every frame
@@ -223,6 +226,16 @@ export function GameBoard({ board, currentPiece }: GameBoardProps) {
         mat.dispose();
       });
       materialCache.current.clear();
+
+      // Dispose current piece material
+      if (currentPieceMaterialRef.current) {
+        currentPieceMaterialRef.current.dispose();
+      }
+
+      // Dispose ghost material
+      if (ghostMaterialRef.current) {
+        ghostMaterialRef.current.dispose();
+      }
 
       // Dispose shared geometries
       blockGeometry.dispose();
@@ -440,6 +453,86 @@ export function GameBoard({ board, currentPiece }: GameBoardProps) {
       // No current piece, remove group
       meshRef.current.remove(pieceGroup);
       currentPieceMaterialRef.current = null;
+    }
+
+    // 4. Update Ghost Piece - compute ghost cells directly in useFrame
+    // (ensures real-time updates even when React doesn't re-render)
+    let ghostGroup = meshRef.current.children.find(
+      c => c.userData?.isGhostPiece
+    ) as THREE.Group | undefined;
+
+    if (currentPiece) {
+      const cells = currentPiece.getCells();
+      const color = currentPiece.getColor();
+
+      // Compute ghost drop position: move cells down until invalid
+      let ghostOffset = 0;
+      while (true) {
+        ghostOffset++;
+        const testCells = cells.map(([cx, cy]) => [cx, cy + ghostOffset]);
+        if (!board.isValidPosition(testCells)) {
+          ghostOffset--;
+          break;
+        }
+      }
+
+
+      const ghostCells = ghostOffset > 0
+        ? cells.map(([cx, cy]) => [cx, cy + ghostOffset])
+        : [];
+
+      if (ghostCells.length > 0) {
+        if (!ghostGroup) {
+          ghostGroup = new THREE.Group();
+          ghostGroup.userData.isGhostPiece = true;
+          meshRef.current.add(ghostGroup);
+        }
+
+        // Get or create material for ghost piece
+        let ghostMaterial = ghostMaterialRef.current;
+        if (!ghostMaterial) {
+          ghostMaterial = new THREE.MeshStandardMaterial({
+            color: color,
+            transparent: true,
+            opacity: 0.35,
+            roughness: 0.2,
+            metalness: 0.3,
+            emissive: color,
+            emissiveIntensity: 0.15,
+            wireframe: true,
+          });
+          ghostMaterialRef.current = ghostMaterial;
+        } else {
+          ghostMaterial.color.setHex(color);
+          ghostMaterial.emissive.setHex(color);
+        }
+
+        // Ensure correct number of cubes
+        while (ghostGroup.children.length > ghostCells.length) {
+          ghostGroup.remove(ghostGroup.children[ghostGroup.children.length - 1]);
+        }
+        while (ghostGroup.children.length < ghostCells.length) {
+          ghostGroup.add(new THREE.Mesh(pieceGeometry, ghostMaterial));
+        }
+
+        // Update positions
+        ghostCells.forEach(([x, y], i) => {
+          const flippedY = (BOARD_HEIGHT - 1 - y) * BLOCK_SIZE + BLOCK_SIZE / 2;
+          const mesh = ghostGroup!.children[i] as THREE.Mesh;
+          mesh.position.set(
+            x * BLOCK_SIZE + BLOCK_SIZE / 2,
+            flippedY,
+            BLOCK_SIZE * 0.2
+          );
+          mesh.material = ghostMaterial;
+        });
+      } else if (ghostGroup) {
+        meshRef.current.remove(ghostGroup);
+        ghostMaterialRef.current = null;
+      }
+    } else if (ghostGroup) {
+      meshRef.current.remove(ghostGroup);
+      ghostMaterialRef.current = null;
     }
   });
 

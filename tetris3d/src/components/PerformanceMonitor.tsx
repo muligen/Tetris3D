@@ -1,23 +1,20 @@
 import { useRef, useState, useEffect, memo } from 'react';
-import { useFrame } from '@react-three/fiber';
 
 /**
  * PerformanceMonitor - FPS 监控面板
  *
- * 轻量级 FPS 计数器，显示实时性能指标
- * - 使用 useFrame 获取精确的帧时间
- * - 维护最近 60 帧的历史
- * - HTML overlay，不影响 3D 渲染性能
+ * 轻量级 FPS 计数器，使用 requestAnimationFrame 而非 useFrame
+ * 这样可以在 Canvas 外部的 DOM overlay 中使用
+ * 快捷键: Ctrl+Shift+P 切换显示/隐藏
  */
 export const PerformanceMonitor = memo(function PerformanceMonitor() {
   const [isVisible, setIsVisible] = useState(false);
   const [fps, setFps] = useState({ current: 0, avg: 0, min: 0 });
 
-  // 使用 ref 存储帧历史，避免触发重新渲染
   const frameHistory = useRef<number[]>([]);
   const lastTime = useRef<number>(0);
-  const frameCount = useRef<number>(0);
   const lastUpdateTime = useRef<number>(0);
+  const rafId = useRef<number>(0);
 
   // 快捷键切换显示/隐藏
   useEffect(() => {
@@ -32,55 +29,48 @@ export const PerformanceMonitor = memo(function PerformanceMonitor() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // FPS 计算 - 使用 useFrame 获取精确时间
-  useFrame(({ clock }) => {
-    const now = clock.getElapsedTime() * 1000;
+  // FPS 计算循环 - 使用原生 rAF，不依赖 R3F
+  useEffect(() => {
+    const tick = (now: number) => {
+      rafId.current = requestAnimationFrame(tick);
 
-    // 跳过第一帧
-    if (lastTime.current === 0) {
+      if (lastTime.current === 0) {
+        lastTime.current = now;
+        return;
+      }
+
+      const delta = now - lastTime.current;
       lastTime.current = now;
-      return;
-    }
 
-    const delta = now - lastTime.current;
-    lastTime.current = now;
+      const currentFps = delta > 0 ? 1000 / delta : 0;
 
-    // 计算 FPS
-    const currentFps = delta > 0 ? 1000 / delta : 0;
+      frameHistory.current.push(currentFps);
+      if (frameHistory.current.length > 60) {
+        frameHistory.current.shift();
+      }
 
-    // 更新帧历史
-    frameHistory.current.push(currentFps);
-    if (frameHistory.current.length > 60) {
-      frameHistory.current.shift();
-    }
+      if (now - lastUpdateTime.current > 250) {
+        const history = frameHistory.current;
+        const avg = history.length > 0 ? history.reduce((a, b) => a + b, 0) / history.length : 0;
+        const min = history.length > 0 ? Math.min(...history) : 0;
 
-    // 每 250ms 更新一次显示（避免频繁更新）
-    frameCount.current++;
-    if (now - lastUpdateTime.current > 250) {
-      const history = frameHistory.current;
-      const avg = history.length > 0 ? history.reduce((a, b) => a + b, 0) / history.length : 0;
-      const min = history.length > 0 ? Math.min(...history) : 0;
+        setFps({ current: currentFps, avg, min });
+        lastUpdateTime.current = now;
+      }
+    };
 
-      setFps({
-        current: currentFps,
-        avg,
-        min,
-      });
-
-      lastUpdateTime.current = now;
-      frameCount.current = 0;
-    }
-  });
+    rafId.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId.current);
+  }, []);
 
   if (!isVisible) {
     return null;
   }
 
-  // 根据 FPS 值选择颜色
   const getColor = (value: number) => {
-    if (value >= 50) return '#0f0'; // 绿色 - 流畅
-    if (value >= 30) return '#ff0'; // 黄色 - 可接受
-    return '#f00'; // 红色 - 卡顿
+    if (value >= 50) return '#0f0';
+    if (value >= 30) return '#ff0';
+    return '#f00';
   };
 
   return (
