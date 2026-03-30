@@ -1,17 +1,24 @@
 /**
- * Leaderboard Service - Manages local high scores leaderboard
+ * Leaderboard Service - Shared leaderboard via backend API
+ * Falls back to localStorage when server is unavailable
  */
 
 import { GameMode } from '../game/GameMode';
 
+// 后端 API 地址，可通过环境变量覆盖
+const API_BASE = typeof import.meta !== 'undefined'
+  ? (import.meta.env?.VITE_API_URL as string) || ''
+  : '';
+
 export interface LeaderboardEntry {
   rank: number;
+  name: string;
   score: number;
   level: number;
   lines: number;
   mode: GameMode;
   date: string;
-  elapsedTime?: number; // For marathon mode tracking
+  elapsedTime?: number;
 }
 
 interface LeaderboardData {
@@ -23,55 +30,86 @@ interface LeaderboardData {
 const STORAGE_KEY = 'tetris3d_leaderboard';
 const MAX_ENTRIES_PER_MODE = 10;
 
-/**
- * Get leaderboard from localStorage
- */
-function getLeaderboardData(): LeaderboardData {
+// ==================== Local Storage Fallback ====================
+
+function getLocalData(): LeaderboardData {
   try {
     const data = localStorage.getItem(STORAGE_KEY);
-    if (data) {
-      return JSON.parse(data);
-    }
-  } catch (error) {
-    console.error('Failed to load leaderboard:', error);
+    if (data) return JSON.parse(data);
+  } catch (e) {
+    console.warn('Failed to read local leaderboard:', e);
   }
-
-  // Return empty leaderboard if nothing stored
-  return {
-    classic: [],
-    challenge: [],
-    marathon: [],
-  };
+  return { classic: [], challenge: [], marathon: [] };
 }
 
-/**
- * Save leaderboard to localStorage
- */
-function saveLeaderboardData(data: LeaderboardData): void {
+function saveLocalData(data: LeaderboardData): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch (error) {
-    console.error('Failed to save leaderboard:', error);
+  } catch (e) {
+    console.warn('Failed to save local leaderboard:', e);
   }
 }
 
+// ==================== API Calls ====================
+
+async function apiGet<T>(path: string): Promise<T | null> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function apiPost<T>(path: string, body: unknown): Promise<T | null> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+// ==================== Public API ====================
+
 /**
- * Add a new score to the leaderboard
+ * Add a score to the leaderboard (with player name)
  */
-export function addScore(
+export async function addScore(
+  name: string,
   score: number,
   level: number,
   lines: number,
   mode: GameMode,
   elapsedTime?: number
-): LeaderboardEntry | null {
-  const data = getLeaderboardData();
+): Promise<LeaderboardEntry | null> {
+  const entry = {
+    name: name || 'Anonymous',
+    score,
+    level,
+    lines,
+    mode,
+    elapsedTime,
+  };
+
+  // 尝试提交到服务器
+  const result = await apiPost<LeaderboardEntry>('/api/leaderboard', entry);
+  if (result) return result;
+
+  // 降级：保存到本地
+  const data = getLocalData();
   const modeKey = mode as keyof LeaderboardData;
   const entries = data[modeKey];
 
-  // Create new entry
   const newEntry: LeaderboardEntry = {
-    rank: 0, // Will be set after sorting
+    rank: 0,
+    name: entry.name,
     score,
     level,
     lines,
@@ -80,69 +118,60 @@ export function addScore(
     elapsedTime,
   };
 
-  // Add to entries and sort by score (descending)
   entries.push(newEntry);
   entries.sort((a, b) => b.score - a.score);
-
-  // Keep only top entries
   if (entries.length > MAX_ENTRIES_PER_MODE) {
     entries.splice(MAX_ENTRIES_PER_MODE);
   }
+  entries.forEach((e, i) => { e.rank = i + 1; });
 
-  // Update ranks
-  entries.forEach((entry, index) => {
-    entry.rank = index + 1;
-  });
-
-  // Check if the new entry made it to the leaderboard
-  const savedEntry = entries.find(
-    (e) =>
-      e.score === score &&
-      e.level === level &&
-      e.lines === lines &&
-      e.date === newEntry.date
+  const saved = entries.find(e =>
+    e.score === score && e.level === level && e.lines === lines && e.date === newEntry.date
   );
 
-  if (savedEntry) {
-    // Save to localStorage
-    saveLeaderboardData(data);
-    return savedEntry;
+  if (saved) {
+    saveLocalData(data);
+    return saved;
   }
-
   return null;
 }
 
 /**
  * Get leaderboard entries for a specific mode
  */
-export function getLeaderboard(mode: GameMode): LeaderboardEntry[] {
-  const data = getLeaderboardData();
-  const modeKey = mode as keyof LeaderboardData;
-  return data[modeKey];
+export async function getLeaderboard(mode: GameMode): Promise<LeaderboardEntry[]> {
+  // 尝试从服务器获取
+  const result = await apiGet<LeaderboardEntry[]>(`/api/leaderboard?mode=${mode}`);
+  if (result) return result;
+
+  // 降级：从本地获取
+  const data = getLocalData();
+  return data[mode as keyof LeaderboardData] || [];
 }
 
 /**
- * Get all leaderboard entries
+ * Get all leaderboard data
  */
-export function getAllLeaderboards(): LeaderboardData {
-  return getLeaderboardData();
+export async function getAllLeaderboards(): Promise<LeaderboardData> {
+  const result = await apiGet<LeaderboardData>('/api/leaderboard/all');
+  if (result) return result;
+  return getLocalData();
 }
 
 /**
- * Get the highest score for a specific mode
+ * Check if a score qualifies for the leaderboard
  */
-export function getHighestScore(mode: GameMode): number {
-  const entries = getLeaderboard(mode);
-  return entries.length > 0 ? entries[0].score : 0;
+export async function qualifiesForLeaderboard(score: number, mode: GameMode): Promise<boolean> {
+  const entries = await getLeaderboard(mode);
+  if (entries.length < MAX_ENTRIES_PER_MODE) return true;
+  return score > entries[entries.length - 1].score;
 }
 
 /**
- * Get the rank a score would achieve (without adding it)
+ * Get predicted rank for a score
  */
-export function getPredictedRank(score: number, mode: GameMode): number {
-  const entries = getLeaderboard(mode);
-
-  // Find where this score would fit
+export async function getPredictedRank(score: number, mode: GameMode): Promise<number> {
+  const entries = await getLeaderboard(mode);
   let rank = 1;
   for (const entry of entries) {
     if (score <= entry.score) {
@@ -151,69 +180,27 @@ export function getPredictedRank(score: number, mode: GameMode): number {
       break;
     }
   }
-
-  // If rank exceeds max entries, return -1 (wouldn't make leaderboard)
   return rank > MAX_ENTRIES_PER_MODE ? -1 : rank;
 }
 
-/**
- * Clear all leaderboard data
- */
-export function clearLeaderboard(): void {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch (error) {
-    console.error('Failed to clear leaderboard:', error);
-  }
-}
+// ==================== Utility ====================
 
-/**
- * Clear leaderboard for a specific mode
- */
-export function clearModeLeaderboard(mode: GameMode): void {
-  const data = getLeaderboardData();
-  const modeKey = mode as keyof LeaderboardData;
-  data[modeKey] = [];
-  saveLeaderboardData(data);
-}
-
-/**
- * Check if a score qualifies for the leaderboard
- */
-export function qualifiesForLeaderboard(score: number, mode: GameMode): boolean {
-  const entries = getLeaderboard(mode);
-  if (entries.length < MAX_ENTRIES_PER_MODE) {
-    return true;
-  }
-  return score > entries[entries.length - 1].score;
-}
-
-/**
- * Format date for display
- */
 export function formatLeaderboardDate(isoString: string): string {
   const date = new Date(isoString);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
-  if (diffDays === 0) {
-    return 'Today';
-  } else if (diffDays === 1) {
-    return 'Yesterday';
-  } else if (diffDays < 7) {
-    return `${diffDays} days ago`;
-  } else if (diffDays < 30) {
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays} days ago`;
+  if (diffDays < 30) {
     const weeks = Math.floor(diffDays / 7);
     return `${weeks} week${weeks > 1 ? 's' : ''} ago`;
-  } else {
-    return date.toLocaleDateString();
   }
+  return date.toLocaleDateString();
 }
 
-/**
- * Format time for display (for marathon mode)
- */
 export function formatTime(milliseconds: number): string {
   const totalSeconds = Math.floor(milliseconds / 1000);
   const hours = Math.floor(totalSeconds / 3600);
@@ -222,7 +209,6 @@ export function formatTime(milliseconds: number): string {
 
   if (hours > 0) {
     return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-  } else {
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   }
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }

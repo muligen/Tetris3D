@@ -3,7 +3,7 @@ import { TetrisGame, ExplosionEvent } from '../game/TetrisGame';
 import { GameMode } from '../game/GameMode';
 import { getHighScore, saveHighScore } from '../services/highScoreService';
 import { getAudioService } from '../services/audioService';
-import { addScore } from '../services/leaderboardService';
+import { addScore as addToLeaderboard } from '../services/leaderboardService';
 import { getGamepadService, GamepadAction } from '../services/gamepadService';
 import { BOARD_HEIGHT, BLOCK_SIZE } from '../game/Board';
 
@@ -70,6 +70,7 @@ interface TetrisState {
   toggleSound: () => void;
   toggleLeaderboard: () => void;
   toggleModeSelector: () => void;
+  submitScore: (name: string) => Promise<void>;
   triggerLineClear: (rows: number[]) => void;
   clearLineClear: () => void;
   triggerScreenShake: (intensity: number) => void;
@@ -215,14 +216,7 @@ export const useTetrisStore = create<TetrisState>((set, get) => {
           set({ highScore: score });
         }
 
-        // Add to leaderboard
-        addScore(
-          score,
-          game.getLevel(),
-          game.getLines(),
-          game.getMode(),
-          game.getElapsedTime()
-        );
+        // 不再自动提交排行榜，等 GameOver 组件中输入名字后提交
       });
 
       game.setOnBombExplosion((event: ExplosionEvent) => {
@@ -490,6 +484,18 @@ export const useTetrisStore = create<TetrisState>((set, get) => {
 
     toggleModeSelector: () => {
       set((state) => ({ showModeSelector: !state.showModeSelector }));
+    },
+
+    submitScore: async (name: string) => {
+      const { game, currentMode } = get();
+      if (!game) return;
+      await addToLeaderboard(
+        name,
+        game.getScore(),
+        game.getLevel(),
+        game.getLines(),
+        currentMode,
+      );
     },
   };
 });

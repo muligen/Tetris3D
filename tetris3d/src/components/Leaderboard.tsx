@@ -2,7 +2,7 @@
  * Leaderboard Component - Displays high scores for each game mode
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   GameMode,
   getAllGameModes,
@@ -20,17 +20,23 @@ interface LeaderboardProps {
 export function Leaderboard({ onClose }: LeaderboardProps) {
   const [selectedMode, setSelectedMode] = useState<GameMode>(GameMode.CLASSIC);
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
+  const [loading, setLoading] = useState(false);
   const modes = getAllGameModes();
 
-  // Load leaderboard when mode changes
-  useEffect(() => {
-    const loadLeaderboard = () => {
-      const modeEntries = getLeaderboard(selectedMode);
+  const loadEntries = useCallback(async () => {
+    setLoading(true);
+    try {
+      const modeEntries = await getLeaderboard(selectedMode);
       setEntries(modeEntries);
-    };
-
-    loadLeaderboard();
+    } catch {
+      setEntries([]);
+    }
+    setLoading(false);
   }, [selectedMode]);
+
+  useEffect(() => {
+    loadEntries();
+  }, [loadEntries]);
 
   const selectedModeConfig = modes.find((m) => m.mode === selectedMode);
 
@@ -39,7 +45,7 @@ export function Leaderboard({ onClose }: LeaderboardProps) {
       <div className="bg-gradient-to-br from-purple-900 to-pink-900 rounded-lg p-6 max-w-2xl w-full max-h-[80vh] overflow-hidden border-2 border-white/20 shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-3xl font-bold text-white">🏆 Leaderboard</h2>
+          <h2 className="text-3xl font-bold text-white">Leaderboard</h2>
           {onClose && (
             <button
               onClick={onClose}
@@ -86,7 +92,11 @@ export function Leaderboard({ onClose }: LeaderboardProps) {
 
         {/* Leaderboard content */}
         <div className="bg-black/30 rounded-lg p-4 overflow-y-auto max-h-[50vh]">
-          {entries.length === 0 ? (
+          {loading ? (
+            <div className="text-center text-white/60 py-12">
+              <p className="text-lg">Loading...</p>
+            </div>
+          ) : entries.length === 0 ? (
             <div className="text-center text-white/60 py-12">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -110,6 +120,7 @@ export function Leaderboard({ onClose }: LeaderboardProps) {
               <thead>
                 <tr className="text-white/60 text-left border-b border-white/20">
                   <th className="pb-3 pr-4">#</th>
+                  <th className="pb-3 pr-4">Name</th>
                   <th className="pb-3 pr-4">Score</th>
                   <th className="pb-3 pr-4 hidden sm:table-cell">Level</th>
                   <th className="pb-3 pr-4 hidden sm:table-cell">Lines</th>
@@ -131,13 +142,16 @@ export function Leaderboard({ onClose }: LeaderboardProps) {
                       <div className="flex items-center gap-2">
                         {entry.rank <= 3 && (
                           <span className="text-xl">
-                            {entry.rank === 1 && '🥇'}
-                            {entry.rank === 2 && '🥈'}
-                            {entry.rank === 3 && '🥉'}
+                            {entry.rank === 1 && '\u{1F947}'}
+                            {entry.rank === 2 && '\u{1F948}'}
+                            {entry.rank === 3 && '\u{1F949}'}
                           </span>
                         )}
                         <span className="font-bold">{entry.rank}</span>
                       </div>
+                    </td>
+                    <td className="py-3 pr-4 font-medium">
+                      {entry.name}
                     </td>
                     <td className="py-3 pr-4">
                       <span className="font-mono text-lg font-bold">
@@ -163,7 +177,7 @@ export function Leaderboard({ onClose }: LeaderboardProps) {
         {/* Footer */}
         {entries.length > 0 && (
           <div className="mt-4 text-center text-white/60 text-sm">
-            Press L to toggle leaderboard • Good luck!
+            Press L to toggle leaderboard
           </div>
         )}
       </div>
@@ -187,13 +201,14 @@ export function MiniLeaderboard({
   const [topScores, setTopScores] = useState<LeaderboardEntry[]>([]);
 
   useEffect(() => {
-    const entries = getLeaderboard(mode);
-    if (entries.length > 0) {
-      setBestScore(entries[0].score);
-      if (!showBestOnly) {
-        setTopScores(entries.slice(0, 3));
+    getLeaderboard(mode).then((entries) => {
+      if (entries.length > 0) {
+        setBestScore(entries[0].score);
+        if (!showBestOnly) {
+          setTopScores(entries.slice(0, 3));
+        }
       }
-    }
+    }).catch(() => {});
   }, [mode, showBestOnly]);
 
   if (showBestOnly) {
@@ -212,6 +227,7 @@ export function MiniLeaderboard({
           className="flex items-center gap-2 text-white text-opacity-80 text-xs"
         >
           <span>{entry.rank}.</span>
+          <span className="truncate max-w-[60px]">{entry.name}</span>
           <span className="font-mono">{entry.score.toLocaleString()}</span>
         </div>
       ))}
